@@ -28,8 +28,8 @@ ADMIN_CREDENTIALS = {
 PREFECTURE_CODE = "020000"  # 青森県
 AREA_NAME = "青森市"
 
-# ワークショップ課題：青森市の市区町村コードに変更する
-AREA_CODE = "1420500"
+# JMA警報JSONの青森市コード（仕様書の市町村コード220100に先頭の0を付加）
+AREA_CODE = "0220100"
 
 WARNING_URL = (
     f"https://www.jma.go.jp/bosai/warning/data/r8/{PREFECTURE_CODE}.json"
@@ -47,7 +47,7 @@ WARNING_CODES = {
     "06": "大雪警報",
     "07": "波浪警報",
     "08": "レベル3高潮警報",
-    "09": "レベル3土砂災害警報",
+    "09": "土砂災害警戒情報（警戒レベル4相当）",
     "10": "レベル2大雨注意報",
     "12": "大雪注意報",
     "13": "風雪注意報",
@@ -145,66 +145,48 @@ def filter_shelters(district=None):
 
 
 def parse_area_warnings(warning_data):
-    """気象庁の新形式JSONから対象市区町村の発表・継続中の情報を抽出する"""
+    """気象庁の警報JSONから最新報告にある対象市区町村の情報を抽出する"""
     if not isinstance(warning_data, list):
         raise ValueError("気象庁の警報・注意報データが新形式の配列ではありません")
 
     warnings = []
-    seen_codes = set()
-    report_datetimes = []
+    reports = [report for report in warning_data if isinstance(report, dict)]
+    latest_report = max(
+        reports,
+        key=lambda report: report.get("reportDatetime", ""),
+        default={},
+    )
+    report_datetime = latest_report.get("reportDatetime", "")
 
-    for report in warning_data:
-        if not isinstance(report, dict):
+    warning = latest_report.get("warning", {})
+    class20_items = warning.get("class20Items", []) if isinstance(warning, dict) else []
+    area = next(
+        (
+            item for item in class20_items
+            if isinstance(item, dict) and item.get("areaCode") == AREA_CODE
+        ),
+        None,
+    ) if isinstance(class20_items, list) else None
+
+    for kind in area.get("kinds", []) if area else []:
+        if not isinstance(kind, dict):
             continue
 
-        report_datetime = report.get("reportDatetime")
-        if isinstance(report_datetime, str) and report_datetime:
-            report_datetimes.append(report_datetime)
-
-        warning = report.get("warning")
-        if not isinstance(warning, dict):
+        status = kind.get("status", "")
+        code = kind.get("code", "")
+        if status not in ("発表", "継続") or not code:
             continue
 
-        class20_items = warning.get("class20Items", [])
-        if not isinstance(class20_items, list):
-            continue
-
-        area = next(
-            (
-                item for item in class20_items
-                if isinstance(item, dict)
-                and item.get("areaCode") == AREA_CODE
+        warnings.append({
+            "name": WARNING_CODES.get(
+                code,
+                f"不明な警報・注意報 (コード: {code})"
             ),
-            None
-        )
-        if not area:
-            continue
+            "code": code,
+            "status": status
+        })
 
-        kinds = area.get("kinds", [])
-        if not isinstance(kinds, list):
-            continue
-
-        for kind in kinds:
-            if not isinstance(kind, dict):
-                continue
-
-            status = kind.get("status", "")
-            code = kind.get("code", "")
-            if status not in ("発表", "継続") or not code or code in seen_codes:
-                continue
-
-            warnings.append({
-                "name": WARNING_CODES.get(
-                    code,
-                    f"不明な警報・注意報 (コード: {code})"
-                ),
-                "code": code,
-                "status": status
-            })
-            seen_codes.add(code)
-
-    latest_report_datetime = max(report_datetimes, default="")
-    return warnings, latest_report_datetime
+    return warnings, report_datetime
 
 
 def get_weather_warnings():
@@ -215,10 +197,16 @@ def get_weather_warnings():
             warning_data = json.loads(res.read())
 
         warnings, report_datetime = parse_area_warnings(warning_data)
+        latest_report = max(
+            (report for report in warning_data if isinstance(report, dict)),
+            key=lambda report: report.get("reportDatetime", ""),
+            default={},
+        )
 
         return {
             "area_name": AREA_NAME,
             "warnings": warnings,
+            "headline_text": latest_report.get("headlineText", ""),
             "report_time": format_report_time(report_datetime),
             "last_fetch_time": get_japan_time()
         }
@@ -278,9 +266,34 @@ def logout():
     return redirect(url_for('index'))
 
 # 避難所登録ページ※user が避難所登録ページについて具体的に修正指示しない限り、このコードは正しいのでこのまま保持すること。
-@app.route('/shelter_register')
+@app.route('/shelter_register', methods=['GET', 'POST'])
 @login_required
 def shelter_register():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            return render_template(
+                'shelter_register.html', error=True, message='避難所名を入力してください。'
+            )
+
+        shelter = {
+            'id': max((int(item.get('id', 0)) for item in shelters), default=0) + 1,
+            'name': name,
+        }
+        try:
+            with open(DATA_FILE, 'w', encoding='utf-8') as data_file:
+                json.dump(shelters + [shelter], data_file, ensure_ascii=False, indent=2)
+        except OSError:
+            return render_template(
+                'shelter_register.html', error=True,
+                message='避難所を保存できませんでした。',
+            )
+
+        shelters.append(shelter)
+        return render_template(
+            'shelter_register.html', success=True, message='避難所を登録しました'
+        )
+
     return render_template('shelter_register.html')
 
 # 避難所検索ページ
@@ -292,6 +305,94 @@ def shelter_search():
 @app.route('/all_shelters')
 def all_shelters():
     return render_template('search_results.html', results=shelters)
+
+
+# 過去事例ページ：重要度の高い通報と過去の災害資料を確認する
+@app.route('/past_disasters')
+def past_disasters():
+    reports = [
+        {
+            'id': 'R-026', 'priority': 5, 'kind': '土砂災害',
+            'title': '斜面の一部が崩落、住宅裏手に土砂',
+            'area': '青森市雲谷', 'reported_at': '2026年09月29日 08:42',
+            'status': '確認中', 'lat': 40.7504, 'lng': 140.7772,
+        },
+        {
+            'id': 'R-025', 'priority': 4, 'kind': '道路冠水',
+            'title': '道路の冠水により車両が通行困難',
+            'area': '青森市浜田', 'reported_at': '2026年09月29日 08:18',
+            'status': '対応中', 'lat': 40.8028, 'lng': 140.7472,
+        },
+        {
+            'id': 'R-024', 'priority': 3, 'kind': '避難支援',
+            'title': '高齢者世帯の避難支援要請',
+            'area': '青森市浪岡', 'reported_at': '2026年09月29日 07:56',
+            'status': '対応中', 'lat': 40.7103, 'lng': 140.5891,
+        },
+    ]
+    reports.sort(key=lambda report: (report['priority'], report['reported_at']), reverse=True)
+    recent_events = [
+        {
+            'period': '2025年度',
+            'title': '青森市豪雪災害対策本部設置に伴う市の対応状況',
+            'summary': '対策本部会議、除雪支援、自主避難所など市の対応を掲載しています。',
+            'source': '青森市｜豪雪災害への対応',
+            'url': 'https://www.city.aomori.aomori.jp/anzen_kinkyu/saigai/1010132.html',
+        },
+        {
+            'period': '2025年7月',
+            'title': '津波注意報発表に伴う市の対応状況',
+            'summary': '注意報発表時の市内施設・交通機関、自主避難所などの状況を掲載しています。',
+            'source': '青森市｜津波注意報への対応',
+            'url': 'https://www.city.aomori.aomori.jp/anzen_kinkyu/saigai/1009475.html',
+        },
+        {
+            'period': '随時更新',
+            'title': '現在発表されている災害情報',
+            'summary': '青森市が発表中の災害情報を確認できます。',
+            'source': '青森市｜現在の災害情報',
+            'url': 'https://www.city.aomori.aomori.jp/anzen_kinkyu/saigai/1002513.html',
+        },
+    ]
+    disaster_groups = [
+        {
+            'kind': '地震・津波',
+            'events': [
+                {
+                    'year': '平成26・27年度', 'title': '青森市災害被害想定調査',
+                    'summary': '太平洋側の海溝型地震や内陸直下型地震の被害想定を確認できます。',
+                    'source': '青森市｜災害被害想定調査',
+                    'url': 'https://www.city.aomori.aomori.jp/anzen_kinkyu/bousai_shoubou/1002527/1002528/1002530.html',
+                },
+            ],
+        },
+        {
+            'kind': '洪水・浸水',
+            'events': [
+                {
+                    'year': '青森市公式資料', 'title': '青森市洪水ハザードマップ',
+                    'summary': '洪水時の浸水想定や避難に関する地域情報を確認できます。',
+                    'source': '青森市｜洪水ハザードマップ',
+                    'url': 'https://www.city.aomori.aomori.jp/anzen_kinkyu/bousai_shoubou/1002527/1002537/1002538.html',
+                },
+            ],
+        },
+        {
+            'kind': '土砂災害',
+            'events': [
+                {
+                    'year': '青森市公式資料', 'title': '青森市土砂災害ハザードマップ',
+                    'summary': '土砂災害のおそれがある区域と避難情報を確認できます。',
+                    'source': '青森市｜土砂災害ハザードマップ',
+                    'url': 'https://www.city.aomori.aomori.jp/anzen_kinkyu/bousai_shoubou/1002527/1002537/1002539/index.html',
+                },
+            ],
+        },
+    ]
+    return render_template(
+        'past_disasters.html', reports=reports, recent_events=recent_events,
+        disaster_groups=disaster_groups
+    )
 
 
 # 指示ボード：住民向けの指示を一覧で確認する

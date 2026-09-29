@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+
+{% block title %}災害事例・対応記録 | 防災アプリ{% endblock %}
+{% block body_class %}past-disasters-body{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+    :root {
+        color-scheme: light;
+        --ink: #24354a;
+        --muted: #5d6b79;
+        --paper: #f0f0f0;
+        --surface: #fff;
+        --line: #d2dcdf;
+        --blue: #2050a0;
+        --blue-dark: #173d79;
+        --cyan: #a0d0d0;
+        --orange: #a63f2c;
+        --orange-pale: #fff0e9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body.past-disasters-body {
+        min-width: 320px;
+        margin: 0;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", sans-serif;
+        line-height: 1.65;
+    }
+
+    body.past-disasters-body > h1,
+    body.past-disasters-body > .site-main {
+        width: min(1240px, calc(100% - 48px));
+        margin-right: auto;
+        margin-left: auto;
+    }
+
+    body.past-disasters-body > h1 {
+        margin-top: 0;
+        margin-bottom: 0;
+        padding: 23px 0 17px;
+        color: var(--blue-dark);
+        font-size: 22px;
+        line-height: 1.25;
+    }
+
+    body.past-disasters-body > nav {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 22px;
+        min-height: 48px;
+        padding: 8px max(24px, calc((100% - 1240px) / 2));
+        color: #e8f2ec;
+        background: var(--blue);
+        font-size: 13px;
+    }
+
+    body.past-disasters-body > nav a { color: inherit; text-decoration: none; }
+    body.past-disasters-body > nav a:hover,
+    body.past-disasters-body > nav a:focus-visible { color: var(--cyan); }
+    body.past-disasters-body > hr { display: none; }
+    body.past-disasters-body > .site-main { padding: 34px 0 64px; }
+    .page-content { animation: arrive .4s ease-out both; }
+
+    @keyframes arrive {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .page-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 28px;
+    }
+
+    .eyebrow {
+        margin: 0 0 6px;
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 700;
+    }
+
+    .page-heading h2 { margin: 0; font-size: 30px; line-height: 1.35; }
+    .page-intro { max-width: 390px; margin: 0; color: var(--muted); font-size: 13px; }
+
+    .content-section { margin-top: 34px; }
+    .section-title {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 13px;
+    }
+
+    .section-title h3 { margin: 0; font-size: 21px; }
+    .section-title p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .report-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr);
+        align-items: start;
+        gap: 18px;
+    }
+
+    .report-table-wrap, .map-panel, .event-group {
+        border: 1px solid var(--line);
+        background: var(--surface);
+    }
+
+    .panel-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 54px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--cyan);
+    }
+
+    .panel-heading h4 { margin: 0; font-size: 15px; }
+    .temporary-label {
+        display: inline-block;
+        padding: 2px 7px;
+        border: 1px solid rgba(32, 80, 160, .3);
+        color: var(--blue-dark);
+        font-size: 10px;
+        font-weight: 700;
+    }
+
+    .table-scroll { overflow-x: auto; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .report-table th, .report-table td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .report-table th { color: var(--muted); background: #f7f9f8; font-size: 10px; white-space: nowrap; }
+    .report-table tbody tr:last-child td { border-bottom: 0; }
+    .report-id { color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .report-summary { display: block; min-width: 145px; font-weight: 700; }
+    .report-priority { color: var(--orange); font-weight: 700; white-space: nowrap; }
+    .report-status { white-space: nowrap; }
+    .report-status::before { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--orange); content: ""; }
+    .panel-note { margin: 0; padding: 10px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+    #reportMap { height: 390px; min-height: 300px; }
+    .map-note { margin: 0; padding: 9px 14px; color: var(--muted); font-size: 10px; }
+
+    .event-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .event-group h4 { margin: 0; padding: 13px 15px; border-bottom: 1px solid var(--line); background: var(--cyan); font-size: 15px; }
+    .event-list { margin: 0; padding: 0; list-style: none; }
+    .event-item { padding: 15px; }
+    .event-item + .event-item { border-top: 1px solid var(--line); }
+    .event-year { margin: 0 0 3px; color: var(--blue); font-size: 10px; font-weight: 700; }
+    .event-item h5 { margin: 0 0 6px; font-size: 14px; }
+    .event-item p { margin: 0 0 9px; color: var(--muted); font-size: 11px; }
+    .source-link { color: var(--blue); font-size: 11px; font-weight: 700; text-underline-offset: 3px; }
+    .recent-events { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .recent-event { padding: 15px; border-left: 3px solid var(--blue); background: var(--surface); }
+    .recent-period { margin: 0 0 5px; color: var(--blue); font-size: 10px; font-weight: 700; }
+    .recent-event h4 { margin: 0 0 7px; font-size: 14px; }
+    .recent-event p { margin: 0 0 10px; color: var(--muted); font-size: 11px; }
+    .source-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
+    a:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+    @media (max-width: 900px) {
+        body.past-disasters-body > h1,
+        body.past-disasters-body > .site-main { width: min(100% - 32px, 680px); }
+        body.past-disasters-body > nav { padding: 10px 16px; gap: 8px 16px; }
+        body.past-disasters-body > .site-main { padding-top: 26px; }
+        .page-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
+        .report-layout { grid-template-columns: 1fr; }
+        .event-groups { grid-template-columns: 1fr; }
+        .recent-events { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 560px) {
+        body.past-disasters-body > h1 { padding-top: 17px; padding-bottom: 13px; }
+        .page-heading h2 { font-size: 25px; }
+        .section-title { align-items: flex-start; flex-direction: column; gap: 4px; }
+        .report-table { min-width: 620px; }
+        #reportMap { height: 330px; min-height: 270px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-content">
+    <header class="page-heading">
+        <div>
+            <p class="eyebrow">AOMORI CITY · DISASTER ARCHIVE</p>
+            <h2>災害事例・対応記録</h2>
+        </div>
+        <p class="page-intro">現在寄せられている重要な通報と、過去の災害記録を確認できます。</p>
+    </header>
+
+    <section aria-labelledby="reports-title">
+        <div class="section-title">
+            <div><p class="eyebrow">PRIORITY REPORTS</p><h3 id="reports-title">重要度の高い通報</h3></div>
+            <span class="temporary-label">通報表示は仮データ</span>
+        </div>
+        <div class="report-layout">
+            <div class="report-table-wrap">
+                <div class="panel-heading"><h4>通報一覧</h4><span>{{ reports|length }}件</span></div>
+                <div class="table-scroll">
+                    <table class="report-table">
+                        <thead>
+                            <tr><th scope="col">重要度</th><th scope="col">通報内容</th><th scope="col">場所・日時</th><th scope="col">状況</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for report in reports %}
+                            <tr>
+                                <td><span class="report-priority">高 {{ report.priority }}</span><br><span class="report-id">{{ report.id }}</span></td>
+                                <td><span class="report-summary">{{ report.title }}</span><span>{{ report.kind }}</span></td>
+                                <td>{{ report.area }}<br><span class="report-id">{{ report.reported_at }}</span></td>
+                                <td><span class="report-status">{{ report.status }}</span></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <p class="panel-note">表示順: 重要度の高い通報を優先。内容・位置・対応状況は画面確認用の仮データです。</p>
+            </div>
+            <section class="map-panel" aria-labelledby="report-map-title">
+                <div class="panel-heading"><h4 id="report-map-title">通報マップ</h4></div>
+                <div id="reportMap" role="application" aria-label="青森市周辺の重要通報マップ"></div>
+                <p class="map-note">マーカーを選択すると通報の概要を確認できます。地図データ © OpenStreetMap contributors</p>
+            </section>
+        </div>
+    </section>
+
+    <section class="content-section" aria-labelledby="recent-title">
+        <div class="section-title">
+            <div><p class="eyebrow">RECENT OFFICIAL UPDATES</p><h3 id="recent-title">直近の災害・市の対応</h3></div>
+            <p>青森市が公開した対応記録・災害情報</p>
+        </div>
+        <div class="recent-events">
+            {% for event in recent_events %}
+            <article class="recent-event">
+                <p class="recent-period">{{ event.period }}</p>
+                <h4>{{ event.title }}</h4>
+                <p>{{ event.summary }}</p>
+                <a class="source-link" href="{{ event.url }}" target="_blank" rel="noopener noreferrer">{{ event.source }} <span aria-hidden="true">↗</span></a>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="content-section" aria-labelledby="history-title">
+        <div class="section-title">
+            <div><p class="eyebrow">OFFICIAL DISASTER REFERENCES</p><h3 id="history-title">災害種別ごとの過去資料</h3></div>
+            <p>青森市が公開する資料</p>
+        </div>
+        <div class="event-groups">
+            {% for group in disaster_groups %}
+            <section class="event-group" aria-label="{{ group.kind }}の資料">
+                <h4>{{ group.kind }}</h4>
+                <ul class="event-list">
+                    {% for event in group.events %}
+                    <li class="event-item">
+                        <p class="event-year">{{ event.year }}</p>
+                        <h5>{{ event.title }}</h5>
+                        <p>{{ event.summary }}</p>
+                        <a class="source-link" href="{{ event.url }}" target="_blank" rel="noopener noreferrer">{{ event.source }} <span aria-hidden="true">↗</span></a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endfor %}
+        </div>
+        <p class="source-note">掲載内容は青森市の公式資料です。想定・対象地域や資料の更新時期はリンク先でご確認ください。</p>
+    </section>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const mapElement = document.getElementById('reportMap');
+    if (!window.L) {
+        mapElement.textContent = '地図を読み込めませんでした。通報一覧をご確認ください。';
+        return;
+    }
+
+    const reports = {{ reports|tojson }};
+    const map = L.map(mapElement).setView([40.8222, 140.7474], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        referrerPolicy: 'strict-origin-when-cross-origin'
+    }).addTo(map);
+
+    reports.forEach(function(report) {
+        const popup = document.createElement('div');
+        const title = document.createElement('strong');
+        const location = document.createElement('p');
+        const status = document.createElement('p');
+        title.textContent = report.title;
+        location.textContent = `${report.area} · ${report.kind}`;
+        status.textContent = `${report.reported_at} · ${report.status}`;
+        popup.append(title, location, status);
+        L.marker([report.lat, report.lng]).addTo(map).bindPopup(popup);
+    });
+});
+</script>
+{% endblock %}

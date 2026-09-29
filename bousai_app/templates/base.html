@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <title>{% block title %}防災アプリ{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
   <!-- ヘッダー -->
   <h1>防災アプリ</h1>
 
@@ -14,6 +15,7 @@
     <a href="/">ホーム</a> |
     <a href="/shelter_search">避難所検索</a> |
     <a href="/shelter_register">避難所登録</a> |
+    <a href="/past_disasters">災害事例・対応記録</a> |
     <a href="/board">指示・発信ボード</a>
     ｜
     {% if session.logged_in %}
@@ -26,7 +28,7 @@
   </nav>
   <hr>
 
-  <main>
+  <main class="site-main">
     <!-- ここに子テンプレートの content が入る -->
     {% block content %}{% endblock %}
   </main>
